@@ -1,0 +1,16 @@
+services:
+  max-bot:
+    build: .
+    container_name: max-bot
+    restart: unless-stopped
+    environment:
+      # Токен берётся из .env (или из окружения хоста)
+      MAX_BOT_TOKEN: ${MAX_BOT_TOKEN}
+      BACKEND_URL: http://138.16.178.46:8000
+      MEDIA_CACHE_FILE: /data/.media_cache.json
+    volumes:
+      # Персистентный кеш media-токенов Max между перезапусками
+      - media-cache:/data
+
+volumes:
+  media-cache:

@@ -1,0 +1,7 @@
+.env
+.media_cache.json
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.idea/
