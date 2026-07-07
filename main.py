@@ -76,6 +76,10 @@ PROGRAM_LATER = (
 )
 SERVICE_UNAVAILABLE = "Сервис временно недоступен, попробуйте позже 🙏"
 NO_CITIES = "Города пока не добавлены, попробуйте позже."
+# Заглушка для разделов, текст которых ещё не заполнен на бэкенде.
+SECTION_LATER = "Этот раздел появится позже."
+# Подпись к схеме проезда по умолчанию (если map_description не задан).
+MAP_CAPTION_DEFAULT = "Схема проезда:"
 
 # --- Коллективная рассылка (менеджеры) ---
 BCAST_CHOOSE_CITY = "Пользователям из какого города необходимо сделать рассылку?"
@@ -271,6 +275,8 @@ async def on_callback(event: MessageCallback, context) -> None:
                 "fullprog:",
                 "contacts:",
                 "map:",
+                "faq:",
+                "checklist:",
                 "day:",
                 "menu:",
                 "change_city:",
@@ -586,9 +592,11 @@ async def handle_menu(event: MessageCallback, payload: str) -> None:
                 is_manager=is_manager,
             )
 
-    # Схема проезда: картинкой через кеш токенов (без перезагрузки при повторе)
+    # Схема проезда: картинкой через кеш токенов (без перезагрузки при повторе).
+    # Подпись берём из map_description, иначе — дефолтная «Схема проезда:».
     elif section == "map":
         map_url = program.get("map_schema")
+        caption = (program.get("map_description") or "").strip() or MAP_CAPTION_DEFAULT
         if not map_url:
             await message.edit(
                 text="Схема проезда появится позже.",
@@ -599,8 +607,22 @@ async def handle_menu(event: MessageCallback, payload: str) -> None:
             message,
             url=map_url,
             filename="map.png",
-            text="Схема проезда:",
+            text=caption,
             keyboard=back_to_menu_keyboard(city_id),
+        )
+
+    # Правила / FAQ: текст с бэкенда, иначе заглушка. Только кнопка возврата в меню.
+    elif section == "faq":
+        text = (program.get("faq") or "").strip() or SECTION_LATER
+        await message.edit(
+            text=text, attachments=[back_to_menu_keyboard(city_id)]
+        )
+
+    # Формы / чек-листы: текст с бэкенда, иначе заглушка.
+    elif section == "checklist":
+        text = (program.get("check_list") or "").strip() or SECTION_LATER
+        await message.edit(
+            text=text, attachments=[back_to_menu_keyboard(city_id)]
         )
 
 

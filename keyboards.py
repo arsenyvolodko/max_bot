@@ -29,6 +29,8 @@ def main_menu_keyboard(city_id: int, is_manager: bool = False):
     """
     kb = InlineKeyboardBuilder()
     kb.row(CallbackButton(text="Программа мероприятия", payload=f"prog:{city_id}"))
+    kb.row(CallbackButton(text="Правила / FAQ", payload=f"faq:{city_id}"))
+    kb.row(CallbackButton(text="Формы / чек-листы", payload=f"checklist:{city_id}"))
     kb.row(CallbackButton(text="Контакты организаторов", payload=f"contacts:{city_id}"))
     kb.row(CallbackButton(text="Схема проезда", payload=f"map:{city_id}"))
     kb.row(CallbackButton(text="Изменить город", payload=f"change_city:{city_id}"))
