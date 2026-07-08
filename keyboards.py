@@ -121,7 +121,19 @@ def days_keyboard(city_id: int, days: list[dict[str, Any]]):
 
 
 def back_to_menu_keyboard(city_id: int):
-    """Одна кнопка возврата в главное меню."""
+    """Одна кнопка возврата в главное меню (навигация внутри одного сообщения)."""
     kb = InlineKeyboardBuilder()
     kb.row(CallbackButton(text="⬅️ В меню", payload=f"menu:{city_id}"))
+    return kb.as_markup()
+
+
+def broadcast_menu_keyboard(city_id: int):
+    """Кнопка «В меню» под сообщением рассылки.
+
+    Payload bmenu:<city_id> — в отличие от back_to_menu_keyboard, по нажатию
+    клавиатура снимается с самого сообщения рассылки и меню приходит ОТДЕЛЬНЫМ
+    сообщением (само сообщение рассылки в истории остаётся).
+    """
+    kb = InlineKeyboardBuilder()
+    kb.row(CallbackButton(text="⬅️ В меню", payload=f"bmenu:{city_id}"))
     return kb.as_markup()

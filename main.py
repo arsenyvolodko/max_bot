@@ -36,6 +36,7 @@ from keyboards import (
     broadcast_cancel_keyboard,
     broadcast_cities_keyboard,
     broadcast_confirm_keyboard,
+    broadcast_menu_keyboard,
     change_city_keyboard,
     cities_keyboard,
     days_keyboard,
@@ -269,6 +270,22 @@ async def on_callback(event: MessageCallback, context) -> None:
             await event.message.edit(text=text, attachments=atts)
             return
 
+        # --- кнопка «В меню» под сообщением рассылки ---
+        # снимаем клавиатуру с самого сообщения (сохраняя текст и картинки),
+        # затем присылаем меню отдельным сообщением.
+        if payload.startswith("bmenu:"):
+            await ack()
+            msg_text, image_tokens, _ = _extract_broadcast_content(event.message)
+            try:
+                await event.message.edit(
+                    text=msg_text,
+                    attachments=_images_to_attachments(image_tokens) or [],
+                )
+            except MaxApiError as e:
+                log.warning("bmenu: failed to strip keyboard: %s", e)
+            await send_menu_to_user(chat_id, user_id)
+            return
+
         # --- навигация по меню ---
         if payload.startswith(
             (
@@ -354,6 +371,24 @@ async def _show_menu_again(chat_id: int, own_city_id: int) -> None:
     await bot.send_message(chat_id=chat_id, text=text, attachments=atts)
 
 
+async def send_menu_to_user(chat_id: int, user_id: int) -> None:
+    """Прислать пользователю его меню новым сообщением.
+
+    Город и роль берём из бэкенда (get_or_create_user идемпотентен). Если город
+    ещё не выбран — предлагаем выбрать. Используется для кнопки «В меню» под
+    рассылкой и для ответа меню на любое сообщение пользователя.
+    """
+    _status, user = await api.get_or_create_user(user_id)
+    city = user.get("city")
+    if not city:
+        await ask_city(chat_id)
+        return
+    text, atts = await menu_or_later_content(
+        city["id"], city["name"], bool(user.get("is_manager"))
+    )
+    await bot.send_message(chat_id=chat_id, text=text, attachments=atts)
+
+
 def _images_to_attachments(image_tokens: list[str]):
     """Список токенов картинок → attachments для send_message (или None)."""
     return [
@@ -435,6 +470,25 @@ async def on_broadcast_message(event: MessageCreated, context) -> None:
     )
 
 
+@dp.message_created()
+async def on_any_message(event: MessageCreated) -> None:
+    """Любое сообщение пользователя → присылаем меню.
+
+    Зарегистрирован ПОСЛЕ on_broadcast_message: диспетчер выполняет первый
+    подходящий хендлер, а хендлер рассылки со StateFilter перехватывает ввод
+    менеджера, когда тот в режиме рассылки. Во всех остальных случаях сюда
+    попадает любое сообщение — отвечаем меню.
+    """
+    chat_id, user_id = event.get_ids()
+    if chat_id is None or user_id is None:
+        return
+    try:
+        await send_menu_to_user(chat_id, user_id)
+    except aiohttp.ClientError as e:
+        log.error("backend error on message from %s: %s", user_id, e)
+        await bot.send_message(chat_id=chat_id, text=SERVICE_UNAVAILABLE)
+
+
 # chat_id рассылок, выполняющихся прямо сейчас — защита от повторного клика
 # «Подтвердить» (use_create_task=True → колбэки обрабатываются параллельно).
 _broadcasts_in_flight: set[int] = set()
@@ -474,20 +528,27 @@ async def _do_broadcast_inner(chat_id: int, context) -> None:
         await bot.send_message(chat_id=chat_id, text=SERVICE_UNAVAILABLE)
         return
 
-    user_ids = [u["user_id"] for u in recipients]
-    if not user_ids:
+    if not recipients:
         await context.clear()
         await bot.send_message(chat_id=chat_id, text=BCAST_NO_RECIPIENTS)
         await _show_menu_again(chat_id, own_city_id)
         return
 
-    out_attachments = _images_to_attachments(image_tokens)
+    # общие вложения (картинки) шлём всем; кнопку «В меню» добавляем на каждого
+    # получателя отдельно — payload несёт его город.
+    base_attachments = _images_to_attachments(image_tokens) or []
 
     ok = 0
-    for uid in user_ids:
+    for u in recipients:
+        uid = u["user_id"]
+        user_city = u.get("city")
+        attachments = list(base_attachments)
+        # без города меню собрать нельзя — тогда шлём сообщение без кнопки
+        if user_city:
+            attachments.append(broadcast_menu_keyboard(user_city["id"]))
         try:
             await bot.send_message(
-                user_id=uid, text=text, attachments=out_attachments
+                user_id=uid, text=text, attachments=attachments or None
             )
             ok += 1
         except Exception as e:  # noqa: BLE001 — один сбой не должен рвать рассылку
@@ -498,10 +559,10 @@ async def _do_broadcast_inner(chat_id: int, context) -> None:
     await context.clear()
     log.info(
         "broadcast done: city=%s delivered %d/%d",
-        target_city_id, ok, len(user_ids),
+        target_city_id, ok, len(recipients),
     )
     await bot.send_message(
-        chat_id=chat_id, text=BCAST_DONE.format(ok=ok, total=len(user_ids))
+        chat_id=chat_id, text=BCAST_DONE.format(ok=ok, total=len(recipients))
     )
     await _show_menu_again(chat_id, own_city_id)
 
