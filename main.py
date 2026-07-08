@@ -334,6 +334,12 @@ async def start_broadcast(
         target_city_id=target_city_id,
         target_city_name=target_city_name,
         own_city_id=own_city_id,
+        # id менеджера — чтобы не рассылать сообщение ему самому (он уже видел
+        # предпросмотр), и mid prompt-сообщения — чтобы снять с него кнопку
+        # «Отмена» после того, как менеджер прислал текст рассылки.
+        manager_id=event.callback.user.user_id,
+        prompt_mid=event.message.body.mid,
+        prompt_text=prompt,
     )
     await event.message.edit(
         text=prompt, attachments=[broadcast_cancel_keyboard(own_city_id)]
@@ -389,6 +395,13 @@ async def send_menu_to_user(chat_id: int, user_id: int) -> None:
     await bot.send_message(chat_id=chat_id, text=text, attachments=atts)
 
 
+def _without_manager(recipients: list[dict], manager_id) -> list[dict]:
+    """Убрать из списка получателей самого менеджера (по user_id)."""
+    if manager_id is None:
+        return recipients
+    return [u for u in recipients if u.get("user_id") != manager_id]
+
+
 def _images_to_attachments(image_tokens: list[str]):
     """Список токенов картинок → attachments для send_message (или None)."""
     return [
@@ -414,6 +427,7 @@ async def on_broadcast_message(event: MessageCreated, context) -> None:
     target_city_id = data.get("target_city_id")
     target_city_name = data.get("target_city_name")
     own_city_id = data.get("own_city_id")
+    manager_id = data.get("manager_id")
 
     text, image_tokens, has_forbidden = _extract_broadcast_content(message)
 
@@ -446,12 +460,28 @@ async def on_broadcast_message(event: MessageCreated, context) -> None:
         await bot.send_message(chat_id=chat_id, text=SERVICE_UNAVAILABLE)
         return
 
+    # самого менеджера из аудитории исключаем: он уже видит предпросмотр,
+    # дублировать ему рассылку в тот же чат не нужно.
+    recipients = _without_manager(recipients, manager_id)
     count = len(recipients)
     if count == 0:
         await context.clear()
         await bot.send_message(chat_id=chat_id, text=BCAST_NO_RECIPIENTS)
         await _show_menu_again(chat_id, own_city_id)
         return
+
+    # менеджер прислал корректное сообщение — снимаем кнопку «Отмена» с
+    # prompt-сообщения, чтобы не осталось «висящей» отмены над предпросмотром.
+    prompt_mid = data.get("prompt_mid")
+    if prompt_mid:
+        try:
+            await bot.edit_message(
+                message_id=prompt_mid,
+                text=data.get("prompt_text") or BCAST_PROMPT_ALL,
+                attachments=[],
+            )
+        except MaxApiError as e:
+            log.warning("failed to strip prompt cancel button: %s", e)
 
     # Запоминаем подготовленное сообщение и переходим к подтверждению.
     await context.update_data(bcast_text=text, bcast_image_tokens=image_tokens)
@@ -513,6 +543,7 @@ async def _do_broadcast_inner(chat_id: int, context) -> None:
     data = await context.get_data()
     target_city_id = data.get("target_city_id")
     own_city_id = data.get("own_city_id")
+    manager_id = data.get("manager_id")
     text = data.get("bcast_text")
     image_tokens = data.get("bcast_image_tokens") or []
 
@@ -528,6 +559,8 @@ async def _do_broadcast_inner(chat_id: int, context) -> None:
         await bot.send_message(chat_id=chat_id, text=SERVICE_UNAVAILABLE)
         return
 
+    # менеджера-отправителя в аудиторию не включаем (см. on_broadcast_message)
+    recipients = _without_manager(recipients, manager_id)
     if not recipients:
         await context.clear()
         await bot.send_message(chat_id=chat_id, text=BCAST_NO_RECIPIENTS)
