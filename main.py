@@ -108,9 +108,10 @@ BCAST_STARTED = "Запускаю рассылку…"
 # TODO: заменить на реальные контакты организаторов (поля в API нет).
 CONTACTS_TEXT = (
     "Контакты организаторов:\n"
+    "Иванцов Иван Владимирович\n"
     "Телефон: +79159784610\n"
     "Email: ivan@milkagency.ru\n"
-    "Telegram: @ivantsov_iv"
+    "Telegram: https://t.me/ivantsov_iv"
 )
 
 
@@ -276,7 +277,6 @@ async def on_callback(event: MessageCallback, context) -> None:
                 "contacts:",
                 "map:",
                 "faq:",
-                "checklist:",
                 "day:",
                 "menu:",
                 "change_city:",
@@ -614,13 +614,6 @@ async def handle_menu(event: MessageCallback, payload: str) -> None:
     # Правила / FAQ: текст с бэкенда, иначе заглушка. Только кнопка возврата в меню.
     elif section == "faq":
         text = (program.get("faq") or "").strip() or SECTION_LATER
-        await message.edit(
-            text=text, attachments=[back_to_menu_keyboard(city_id)]
-        )
-
-    # Формы / чек-листы: текст с бэкенда, иначе заглушка.
-    elif section == "checklist":
-        text = (program.get("check_list") or "").strip() or SECTION_LATER
         await message.edit(
             text=text, attachments=[back_to_menu_keyboard(city_id)]
         )
