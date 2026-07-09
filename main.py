@@ -661,12 +661,12 @@ async def handle_menu(event: MessageCallback, payload: str) -> None:
         await deliver_and_menu(
             chat_id,
             city_id,
-            file_url=program.get("schedule_file"),
+            file_urls=[program.get("schedule_file")],
             text=program.get("schedule_text"),
             is_manager=is_manager,
         )
 
-    # Конкретный день: та же логика — файл/картинка + текст дня, затем меню
+    # Конкретный день: несколько картинок (schedule_files) + текст дня, затем меню
     elif section == "day":
         day_id = int(parts[2])
         day = next((d for d in program.get("days", []) if d["id"] == day_id), None)
@@ -674,14 +674,18 @@ async def handle_menu(event: MessageCallback, payload: str) -> None:
         await message.delete()
         if day is None:
             await deliver_and_menu(
-                chat_id, city_id, file_url=None, text="День не найден.",
+                chat_id, city_id, file_urls=None, text="День не найден.",
                 is_manager=is_manager,
             )
         else:
+            files = sorted(
+                day.get("schedule_files", []),
+                key=lambda f: f.get("order", 0),
+            )
             await deliver_and_menu(
                 chat_id,
                 city_id,
-                file_url=day.get("schedule_file"),
+                file_urls=[f.get("file") for f in files],
                 text=day.get("schedule_text"),
                 is_manager=is_manager,
             )
@@ -728,32 +732,41 @@ async def edit_with_media(message, url: str, filename: str, text, keyboard) -> N
         await message.edit(text=text, attachments=[att, keyboard])
 
 
-async def send_with_media(chat_id: int, url: str, filename: str, text) -> None:
-    """Отправить новое сообщение с media (картинка/файл — по содержимому) и текстом.
+async def send_with_media_multi(chat_id: int, urls: list[str], text) -> None:
+    """Отправить одно сообщение с несколькими media (картинками) и текстом.
 
-    Тип вложения определяется автоматически при загрузке. При протухшем токене —
-    инвалидация кеша и одна перезагрузка.
+    Токены переиспользуются из кеша. Если Max отвергнет любой из токенов —
+    инвалидируем весь набор и перезаливаем один раз.
     """
-    att = await media.get_attachment(bot, url, filename=filename)
+    async def build(force: bool) -> list:
+        return [
+            await media.get_attachment(bot, url, filename="Программа", force=force)
+            for url in urls
+        ]
+
+    atts = await build(force=False)
     try:
-        await bot.send_message(chat_id=chat_id, text=text, attachments=[att])
+        await bot.send_message(chat_id=chat_id, text=text, attachments=atts)
     except MaxApiError as e:
-        log.warning("media token rejected (%s), re-uploading: %s", url, e)
-        media.invalidate(url)
-        att = await media.get_attachment(bot, url, filename=filename, force=True)
-        await bot.send_message(chat_id=chat_id, text=text, attachments=[att])
+        log.warning("media token rejected (%s), re-uploading: %s", urls, e)
+        for url in urls:
+            media.invalidate(url)
+        atts = await build(force=True)
+        await bot.send_message(chat_id=chat_id, text=text, attachments=atts)
 
 
 async def deliver_and_menu(
-    chat_id: int, city_id: int, file_url, text, is_manager: bool = False
+    chat_id: int, city_id: int, file_urls, text, is_manager: bool = False
 ) -> None:
-    """Прислать контент (файл/картинка + текст) и затем новое сообщение с меню.
+    """Прислать контент (одна/несколько картинок + текст) и затем меню.
 
-    Используется для «Полной программы» и для конкретного дня.
+    Используется для «Полной программы» и для конкретного дня. file_urls —
+    список URL картинок (может быть пустым или содержать один/несколько файлов).
     """
     text = (text or "").strip()
-    if file_url:
-        await send_with_media(chat_id, file_url, "Программа", text=text or None)
+    urls = [u for u in (file_urls or []) if u]
+    if urls:
+        await send_with_media_multi(chat_id, urls, text=text or None)
     else:
         await bot.send_message(
             chat_id=chat_id, text=text or "Контент появится позже."
