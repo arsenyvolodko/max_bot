@@ -650,7 +650,7 @@ async def handle_menu(event: MessageCallback, payload: str) -> None:
     # Программа: кнопки «Полная программа» + по дням
     if section == "prog":
         await message.edit(
-            text="Программа мероприятия:",
+            text="Программа:",
             attachments=[days_keyboard(city_id, program.get("days", []))],
         )
 

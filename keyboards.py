@@ -28,7 +28,7 @@ def main_menu_keyboard(city_id: int, is_manager: bool = False):
     Менеджерам (is_manager) добавляем кнопку коллективной рассылки.
     """
     kb = InlineKeyboardBuilder()
-    kb.row(CallbackButton(text="Программа мероприятия", payload=f"prog:{city_id}"))
+    kb.row(CallbackButton(text="Программа", payload=f"prog:{city_id}"))
     kb.row(CallbackButton(text="Правила / FAQ", payload=f"faq:{city_id}"))
     kb.row(CallbackButton(text="Контакты организаторов", payload=f"contacts:{city_id}"))
     kb.row(CallbackButton(text="Схема проезда", payload=f"map:{city_id}"))
@@ -113,7 +113,7 @@ def days_keyboard(city_id: int, days: list[dict[str, Any]]):
         kb.row(*pair)
     kb.row(
         CallbackButton(
-            text="Полная программа мероприятия", payload=f"fullprog:{city_id}"
+            text="Полная программа", payload=f"fullprog:{city_id}"
         )
     )
     kb.row(CallbackButton(text="⬅️ В меню", payload=f"menu:{city_id}"))
