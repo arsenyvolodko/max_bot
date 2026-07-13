@@ -350,6 +350,8 @@ def _extract_broadcast_content(message) -> tuple[str | None, list[str], bool]:
     """Разобрать сообщение менеджера: (text, image_tokens, has_forbidden).
 
     has_forbidden=True, если есть любое вложение кроме картинки (файл, видео…).
+    Вложение "share" (автопревью ссылки, которое Max подставляет к тексту)
+    игнорируем: при рассылке текста получателям превью сгенерируется заново.
     """
     body = message.body
     text = (body.text if body else None) or None
@@ -363,6 +365,9 @@ def _extract_broadcast_content(message) -> tuple[str | None, list[str], bool]:
             token = getattr(att.payload, "token", None)
             if token:
                 image_tokens.append(token)
+        elif att_type == "share":
+            # автопревью ссылки — не файл, рассылать можно
+            continue
         else:
             has_forbidden = True
     return text, image_tokens, has_forbidden
