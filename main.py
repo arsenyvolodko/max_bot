@@ -714,12 +714,16 @@ async def handle_menu(event: MessageCallback, payload: str) -> None:
             keyboard=back_to_menu_keyboard(city_id),
         )
 
-    # Правила / FAQ: текст с бэкенда, иначе заглушка. Только кнопка возврата в меню.
+    # Правила / FAQ: текст + опциональный файл (faq_file). Картинку крепим в то
+    # же сообщение (как схему проезда), PDF/документ шлём отдельным сообщением.
     elif section == "faq":
         text = (program.get("faq") or "").strip() or SECTION_LATER
-        await message.edit(
-            text=text, attachments=[back_to_menu_keyboard(city_id)]
-        )
+        faq_url = program.get("faq_file")
+        keyboard = back_to_menu_keyboard(city_id)
+        if faq_url:
+            await edit_faq_with_file(message, chat_id, faq_url, text, keyboard)
+        else:
+            await message.edit(text=text, attachments=[keyboard])
 
 
 async def edit_with_media(message, url: str, filename: str, text, keyboard) -> None:
@@ -735,6 +739,38 @@ async def edit_with_media(message, url: str, filename: str, text, keyboard) -> N
         media.invalidate(url)
         att = await media.get_attachment(bot, url, filename=filename, force=True)
         await message.edit(text=text, attachments=[att, keyboard])
+
+
+async def edit_faq_with_file(message, chat_id: int, url: str, text, keyboard) -> None:
+    """FAQ с прикреплённым файлом (faq_file).
+
+    Тип файла Max определяет по содержимому (magic bytes) при загрузке:
+      - картинка -> крепим в то же сообщение с текстом FAQ (как схему проезда);
+      - PDF/документ -> текст остаётся в исходном сообщении, файл шлём отдельным.
+    Если Max отверг токен (протух) — инвалидируем кеш и перезаливаем один раз.
+    """
+    filename = url.split("?")[0].rstrip("/").rsplit("/", 1)[-1] or "faq"
+    att = await media.get_attachment(bot, url, filename=filename)
+
+    if att.type == UploadType.IMAGE:
+        try:
+            await message.edit(text=text, attachments=[att, keyboard])
+        except MaxApiError as e:
+            log.warning("media token rejected (%s), re-uploading: %s", url, e)
+            media.invalidate(url)
+            att = await media.get_attachment(bot, url, filename=filename, force=True)
+            await message.edit(text=text, attachments=[att, keyboard])
+        return
+
+    # документ (pdf и т.п.): текст в исходном сообщении, файл — отдельным сообщением
+    await message.edit(text=text, attachments=[keyboard])
+    try:
+        await bot.send_message(chat_id=chat_id, attachments=[att])
+    except MaxApiError as e:
+        log.warning("media token rejected (%s), re-uploading: %s", url, e)
+        media.invalidate(url)
+        att = await media.get_attachment(bot, url, filename=filename, force=True)
+        await bot.send_message(chat_id=chat_id, attachments=[att])
 
 
 async def send_with_media_multi(chat_id: int, urls: list[str], text) -> None:
