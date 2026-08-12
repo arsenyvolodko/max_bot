@@ -81,6 +81,8 @@ NO_CITIES = "Города пока не добавлены, попробуйте
 SECTION_LATER = "Этот раздел появится позже."
 # Подпись к схеме проезда по умолчанию (если map_description не задан).
 MAP_CAPTION_DEFAULT = "Схема проезда:"
+# Имя, под которым участник видит файл из раздела «Инструкция / FAQ»
+FAQ_FILENAME = "Инструкция для участников"
 
 # --- Коллективная рассылка (менеджеры) ---
 BCAST_CHOOSE_CITY = "Пользователям из какого города необходимо сделать рассылку?"
@@ -749,8 +751,7 @@ async def edit_faq_with_file(message, chat_id: int, url: str, text, keyboard) ->
       - PDF/документ -> текст остаётся в исходном сообщении, файл шлём отдельным.
     Если Max отверг токен (протух) — инвалидируем кеш и перезаливаем один раз.
     """
-    filename = url.split("?")[0].rstrip("/").rsplit("/", 1)[-1] or "faq"
-    att = await media.get_attachment(bot, url, filename=filename)
+    att = await media.get_attachment(bot, url, filename=FAQ_FILENAME)
 
     if att.type == UploadType.IMAGE:
         try:
@@ -758,7 +759,7 @@ async def edit_faq_with_file(message, chat_id: int, url: str, text, keyboard) ->
         except MaxApiError as e:
             log.warning("media token rejected (%s), re-uploading: %s", url, e)
             media.invalidate(url)
-            att = await media.get_attachment(bot, url, filename=filename, force=True)
+            att = await media.get_attachment(bot, url, filename=FAQ_FILENAME, force=True)
             await message.edit(text=text, attachments=[att, keyboard])
         return
 
@@ -769,7 +770,7 @@ async def edit_faq_with_file(message, chat_id: int, url: str, text, keyboard) ->
     except MaxApiError as e:
         log.warning("media token rejected (%s), re-uploading: %s", url, e)
         media.invalidate(url)
-        att = await media.get_attachment(bot, url, filename=filename, force=True)
+        att = await media.get_attachment(bot, url, filename=FAQ_FILENAME, force=True)
         await bot.send_message(chat_id=chat_id, attachments=[att])
 
 

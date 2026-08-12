@@ -1,11 +1,30 @@
 """Асинхронный клиент к бэкенду мероприятия (Django REST)."""
 import config  # noqa: F401  — ПЕРВЫМ: применяет SSL-патч до импорта aiohttp
 
+import asyncio
+import functools
+import logging
 from typing import Any, Optional
 
 import aiohttp
 
 from config import BACKEND_URL
+
+log = logging.getLogger("max_bot.api")
+
+# Ошибки бэкенда, которые обязаны ловить хендлеры. asyncio.TimeoutError НЕ
+# наследуется от aiohttp.ClientError — без него таймаут бэка роняет хендлер и
+# пользователь не получает ни ответа, ни сообщения об ошибке.
+BACKEND_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError)
+
+# Без явного таймаута aiohttp ждёт ответа 5 минут (дефолт total=300) — всё это
+# время бот «не реагирует» на нажатие. Держим короткие рамки: бэк локальный.
+TIMEOUT = aiohttp.ClientTimeout(total=15, connect=5, sock_connect=5, sock_read=10)
+
+# Сколько раз повторить запрос при таймауте/обрыве соединения. Все ручки
+# идемпотентны (GET и get_or_create-подобные POST), повтор безопасен.
+RETRIES = 1
+RETRY_DELAY = 0.5
 
 _session: Optional[aiohttp.ClientSession] = None
 
@@ -14,8 +33,30 @@ async def _get_session() -> aiohttp.ClientSession:
     """Лениво создаёт общую сессию (внутри работающего event loop)."""
     global _session
     if _session is None or _session.closed:
-        _session = aiohttp.ClientSession(base_url=BACKEND_URL)
+        _session = aiohttp.ClientSession(base_url=BACKEND_URL, timeout=TIMEOUT)
     return _session
+
+
+def _with_retry(func):
+    """Повторить запрос при таймауте/обрыве соединения (сетевой флап бэка)."""
+
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        last_error: Exception
+        for attempt in range(RETRIES + 1):
+            try:
+                return await func(*args, **kwargs)
+            except (asyncio.TimeoutError, aiohttp.ClientConnectionError) as e:
+                last_error = e
+                if attempt < RETRIES:
+                    log.warning(
+                        "%s: %s (%r), повтор %d/%d",
+                        func.__name__, type(e).__name__, e, attempt + 1, RETRIES,
+                    )
+                    await asyncio.sleep(RETRY_DELAY)
+        raise last_error
+
+    return wrapper
 
 
 async def close_session() -> None:
@@ -23,6 +64,7 @@ async def close_session() -> None:
         await _session.close()
 
 
+@_with_retry
 async def get_or_create_user(user_id: int) -> tuple[int, dict[str, Any]]:
     """POST /api/users/ — get_or_create.
 
@@ -35,6 +77,7 @@ async def get_or_create_user(user_id: int) -> tuple[int, dict[str, Any]]:
         return r.status, await r.json()
 
 
+@_with_retry
 async def get_cities() -> list[dict[str, Any]]:
     """GET /api/cities/ — список городов [{"id", "name"}, ...]."""
     session = await _get_session()
@@ -51,6 +94,7 @@ async def get_city(city_id: int) -> Optional[dict[str, Any]]:
     return None
 
 
+@_with_retry
 async def join_city(user_id: int, city_id: int) -> dict[str, Any]:
     """POST /api/users/{user_id}/city/ — привязать пользователя к городу.
 
@@ -64,6 +108,7 @@ async def join_city(user_id: int, city_id: int) -> dict[str, Any]:
         return await r.json()
 
 
+@_with_retry
 async def list_users(city_id: Optional[int] = None) -> list[dict[str, Any]]:
     """GET /api/users/list/ — список пользователей.
 
