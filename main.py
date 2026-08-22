@@ -111,10 +111,10 @@ BCAST_STARTED = "Запускаю рассылку…"
 # TODO: заменить на реальные контакты организаторов (поля в API нет).
 CONTACTS_TEXT = (
     "Контакты организаторов:\n"
-    "Иванцов Иван Владимирович\n"
-    "Телефон: +79159784610\n"
-    "Email: ivan@milkagency.ru\n"
-    "Telegram: https://t.me/ivantsov_iv"
+    "Карпов Александр Андреевич\n"
+    "Телефон: +79376285317\n"
+    "Email: aalexkarpov@milkagency.ru\n"
+    "Telegram: https://t.me/aalexkarpov"
 )
 
 
