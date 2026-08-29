@@ -24,6 +24,7 @@ from maxapi import Bot, Dispatcher
 from maxapi.context import State, StatesGroup
 from maxapi.exceptions.max import MaxApiError
 from maxapi.filters import StateFilter
+from maxapi.enums import Format
 from maxapi.enums.upload_type import UploadType
 from maxapi.types import BotStarted, MessageCallback, MessageCreated
 from maxapi.types.attachments.upload import AttachmentPayload, AttachmentUpload
@@ -277,14 +278,28 @@ async def on_callback(event: MessageCallback, context) -> None:
         # затем присылаем меню отдельным сообщением.
         if payload.startswith("bmenu:"):
             await ack()
-            msg_text, image_tokens, _ = _extract_broadcast_content(event.message)
+            _txt, msg_html, image_tokens, shares, _ = _extract_broadcast_content(
+                event.message
+            )
+            # текст возвращаем в html + format, иначе edit сотрёт разметку
+            # (вшитые ссылки, жирный) уже доставленного сообщения; share-превью
+            # пробрасываем обратно, чтобы не пропала карточка ссылки.
+            keep = _images_to_attachments(image_tokens) or []
             try:
                 await event.message.edit(
-                    text=msg_text,
-                    attachments=_images_to_attachments(image_tokens) or [],
+                    text=msg_html,
+                    attachments=keep + shares,
+                    format=Format.HTML,
                 )
             except MaxApiError as e:
-                log.warning("bmenu: failed to strip keyboard: %s", e)
+                # share-вложение мог не принять API — пробуем без него
+                log.warning("bmenu: edit with shares failed: %s", e)
+                try:
+                    await event.message.edit(
+                        text=msg_html, attachments=keep, format=Format.HTML
+                    )
+                except MaxApiError as e2:
+                    log.warning("bmenu: failed to strip keyboard: %s", e2)
             await send_menu_to_user(chat_id, user_id)
             return
 
@@ -348,18 +363,28 @@ async def start_broadcast(
     )
 
 
-def _extract_broadcast_content(message) -> tuple[str | None, list[str], bool]:
-    """Разобрать сообщение менеджера: (text, image_tokens, has_forbidden).
+def _extract_broadcast_content(
+    message,
+) -> tuple[str | None, str | None, list[str], list, bool]:
+    """Разобрать сообщение: (text, html, image_tokens, shares, has_forbidden).
 
+    text  — исходный текст без разметки (нужен только для проверки длины);
+    html  — тот же текст, но с разметкой из body.markup (гиперссылки, жирный…).
+            Пересылать нужно именно его с format=Format.HTML: url вшитой в
+            текст ссылки лежит в markup, а не в text, поэтому голый body.text
+            приезжает получателю без ссылки вообще.
+    shares — вложения "share" (автопревью ссылки, которое Max подставляет к
+            тексту): это не файл, рассылать можно, а при edit их надо
+            пробросить обратно, иначе карточка превью пропадёт.
     has_forbidden=True, если есть любое вложение кроме картинки (файл, видео…).
-    Вложение "share" (автопревью ссылки, которое Max подставляет к тексту)
-    игнорируем: при рассылке текста получателям превью сгенерируется заново.
     """
     body = message.body
     text = (body.text if body else None) or None
+    html = (body.html_text if body else None) or None
     attachments = (body.attachments if body else None) or []
 
     image_tokens: list[str] = []
+    shares: list = []
     has_forbidden = False
     for att in attachments:
         att_type = att.type.value if hasattr(att.type, "value") else att.type
@@ -368,11 +393,10 @@ def _extract_broadcast_content(message) -> tuple[str | None, list[str], bool]:
             if token:
                 image_tokens.append(token)
         elif att_type == "share":
-            # автопревью ссылки — не файл, рассылать можно
-            continue
+            shares.append(att)
         else:
             has_forbidden = True
-    return text, image_tokens, has_forbidden
+    return text, html, image_tokens, shares, has_forbidden
 
 
 async def _show_menu_again(chat_id: int, own_city_id: int) -> None:
@@ -436,7 +460,9 @@ async def on_broadcast_message(event: MessageCreated, context) -> None:
     own_city_id = data.get("own_city_id")
     manager_id = data.get("manager_id")
 
-    text, image_tokens, has_forbidden = _extract_broadcast_content(message)
+    text, html, image_tokens, _shares, has_forbidden = _extract_broadcast_content(
+        message
+    )
 
     if has_forbidden:
         await bot.send_message(
@@ -452,7 +478,9 @@ async def on_broadcast_message(event: MessageCreated, context) -> None:
             attachments=[broadcast_cancel_keyboard(own_city_id)],
         )
         return
-    if text and len(text) >= 4000:
+    # лимит считаем по тому, что реально уйдёт в API: html-теги разметки
+    # добавляют символов к исходному тексту
+    if max(len(text or ""), len(html or "")) >= 4000:
         await bot.send_message(
             chat_id=chat_id,
             text="Текст слишком длинный (до 4000 символов). Сократите и пришлите снова.",
@@ -491,12 +519,16 @@ async def on_broadcast_message(event: MessageCreated, context) -> None:
             log.warning("failed to strip prompt cancel button: %s", e)
 
     # Запоминаем подготовленное сообщение и переходим к подтверждению.
-    await context.update_data(bcast_text=text, bcast_image_tokens=image_tokens)
+    # в FSM кладём html: именно он уйдёт получателям с format=Format.HTML
+    await context.update_data(bcast_text=html, bcast_image_tokens=image_tokens)
     await context.set_state(Broadcast.confirming)
 
     # 1) показываем менеджеру само сообщение (как его увидят получатели)
     await bot.send_message(
-        chat_id=chat_id, text=text, attachments=_images_to_attachments(image_tokens)
+        chat_id=chat_id,
+        text=html,
+        attachments=_images_to_attachments(image_tokens),
+        format=Format.HTML,
     )
     # 2) сводка + кнопки подтверждения
     audience = "" if target_city_name is None else f" из города {target_city_name}"
@@ -551,6 +583,7 @@ async def _do_broadcast_inner(chat_id: int, context) -> None:
     target_city_id = data.get("target_city_id")
     own_city_id = data.get("own_city_id")
     manager_id = data.get("manager_id")
+    # bcast_text — уже html-версия сообщения (см. on_broadcast_message)
     text = data.get("bcast_text")
     image_tokens = data.get("bcast_image_tokens") or []
 
@@ -588,7 +621,10 @@ async def _do_broadcast_inner(chat_id: int, context) -> None:
             attachments.append(broadcast_menu_keyboard(user_city["id"]))
         try:
             await bot.send_message(
-                user_id=uid, text=text, attachments=attachments or None
+                user_id=uid,
+                text=text,
+                attachments=attachments or None,
+                format=Format.HTML,
             )
             ok += 1
         except Exception as e:  # noqa: BLE001 — один сбой не должен рвать рассылку
